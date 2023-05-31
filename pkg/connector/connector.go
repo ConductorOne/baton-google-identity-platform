@@ -31,6 +31,7 @@ var (
 func (gip *GoogleIdentityPlatform) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 	return &v2.ConnectorMetadata{
 		DisplayName: "Google Identity Platform",
+		Description: "Connector syncing users from Google Identity Platform to Baton.",
 	}, nil
 }
 
