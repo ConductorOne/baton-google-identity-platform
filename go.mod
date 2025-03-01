@@ -1,6 +1,6 @@
 module github.com/ConductorOne/baton-google-identity-platform
 
-go 1.19
+go 1.23
 
 require (
 	firebase.google.com/go v3.13.0+incompatible
