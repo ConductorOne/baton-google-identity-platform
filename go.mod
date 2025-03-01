@@ -1,11 +1,13 @@
 module github.com/ConductorOne/baton-google-identity-platform
 
-go 1.19
+go 1.23
 
 require (
 	firebase.google.com/go v3.13.0+incompatible
 	github.com/conductorone/baton-sdk v0.1.33
+	github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
+	github.com/quasilyte/go-ruleguard/dsl v0.3.22
 	github.com/spf13/cobra v1.8.0
 	go.uber.org/zap v1.26.0
 	google.golang.org/api v0.143.0
@@ -87,7 +89,7 @@ require (
 	golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa // indirect
 	golang.org/x/net v0.18.0 // indirect
 	golang.org/x/oauth2 v0.14.0 // indirect
-	golang.org/x/sync v0.5.0 // indirect
+	golang.org/x/sync v0.11.0 // indirect
 	golang.org/x/sys v0.15.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
