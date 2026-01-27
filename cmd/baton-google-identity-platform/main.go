@@ -45,7 +45,7 @@ func main() {
 func getConnector(ctx context.Context, cfg *config.GoogleIdentityPlatform) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
 
-	cb, err := connector.New(ctx, cfg.CredentialsJSONFilePath)
+	cb, err := connector.New(ctx, cfg.CredentialsJsonFilePath)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
 		return nil, err

@@ -17,10 +17,11 @@ var ConfigurationFields = []field.SchemaField{
 	CredentialsJSONFilePath,
 }
 
+//go:generate go run ./gen
 var Config = field.NewConfiguration(ConfigurationFields)
 
 func ValidateConfig(ctx context.Context, cfg *GoogleIdentityPlatform) error {
-	if cfg.CredentialsJSONFilePath == "" {
+	if cfg.CredentialsJsonFilePath == "" {
 		return fmt.Errorf("credentials json file path is missing")
 	}
 	return nil
