@@ -112,16 +112,17 @@ func (j *BulkWriterJob) setError(e error) {
 // independent of each other. Bulkwriter does not apply writes in any set order;
 // thus a document can't have set on it immediately after creation.
 type BulkWriter struct {
-	database        string           // the database as resource name: projects/[PROJECT]/databases/[DATABASE]
-	start           time.Time        // when this BulkWriter was started; used to calculate qps and rate increases
-	vc              *vkit.Client     // internal client
-	maxOpsPerSecond int              // number of requests that can be sent per second
-	docUpdatePaths  map[string]bool  // document paths with corresponding writes in the queue
-	limiter         rate.Limiter     // limit requests to server to <= 500 qps
-	bundler         *bundler.Bundler // handle bundling up writes to Firestore
-	ctx             context.Context  // context for canceling all BulkWriter operations
-	isOpenLock      sync.RWMutex     // guards against setting isOpen concurrently
-	isOpen          bool             // flag that the BulkWriter is closed
+	database           string           // the database as resource name: projects/[PROJECT]/databases/[DATABASE]
+	start              time.Time        // when this BulkWriter was started; used to calculate qps and rate increases
+	vc                 *vkit.Client     // internal client
+	maxOpsPerSecond    int              // number of requests that can be sent per second
+	docUpdatePaths     map[string]bool  // document paths with corresponding writes in the queue
+	docUpdatePathsLock sync.Mutex       // guards docUpdatePaths
+	limiter            rate.Limiter     // limit requests to server to <= 500 qps
+	bundler            *bundler.Bundler // handle bundling up writes to Firestore
+	ctx                context.Context  // context for canceling all BulkWriter operations
+	isOpenLock         sync.RWMutex     // guards against setting isOpen concurrently
+	isOpen             bool             // flag that the BulkWriter is closed
 }
 
 // newBulkWriter creates a new instance of the BulkWriter.
@@ -178,7 +179,7 @@ func (bw *BulkWriter) Create(doc *DocumentRef, datum interface{}) (*BulkWriterJo
 
 	w, err := doc.newCreateWrites(datum)
 	if err != nil {
-		return nil, fmt.Errorf("firestore: cannot create %v with %v", doc.ID, datum)
+		return nil, fmt.Errorf("firestore: cannot create %v with %v. %w", doc.ID, datum, err)
 	}
 
 	if len(w) > 1 {
@@ -201,7 +202,7 @@ func (bw *BulkWriter) Delete(doc *DocumentRef, preconds ...Precondition) (*BulkW
 
 	w, err := doc.newDeleteWrites(preconds)
 	if err != nil {
-		return nil, fmt.Errorf("firestore: cannot delete doc %v", doc.ID)
+		return nil, fmt.Errorf("firestore: cannot delete doc %v. %w", doc.ID, err)
 	}
 
 	if len(w) > 1 {
@@ -224,7 +225,7 @@ func (bw *BulkWriter) Set(doc *DocumentRef, datum interface{}, opts ...SetOption
 
 	w, err := doc.newSetWrites(datum, opts)
 	if err != nil {
-		return nil, fmt.Errorf("firestore: cannot set %v on doc %v", datum, doc.ID)
+		return nil, fmt.Errorf("firestore: cannot set %v on doc %v. %w", datum, doc.ID, err)
 	}
 
 	if len(w) > 1 {
@@ -247,7 +248,7 @@ func (bw *BulkWriter) Update(doc *DocumentRef, updates []Update, preconds ...Pre
 
 	w, err := doc.newUpdatePathWrites(updates, preconds)
 	if err != nil {
-		return nil, fmt.Errorf("firestore: cannot update doc %v", doc.ID)
+		return nil, fmt.Errorf("firestore: cannot update doc %v. %w", doc.ID, err)
 	}
 
 	if len(w) > 1 {
@@ -270,6 +271,8 @@ func (bw *BulkWriter) checkWriteConditions(doc *DocumentRef) error {
 		return errors.New("firestore: nil document contents")
 	}
 
+	bw.docUpdatePathsLock.Lock()
+	defer bw.docUpdatePathsLock.Unlock()
 	_, havePath := bw.docUpdatePaths[doc.shortPath]
 	if havePath {
 		return fmt.Errorf("firestore: BulkWriter received duplicate write for path: %v", doc.shortPath)

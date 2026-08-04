@@ -17,6 +17,7 @@ package firestore
 import (
 	"context"
 	"errors"
+	"time"
 
 	pb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	"cloud.google.com/go/internal/trace"
@@ -41,6 +42,7 @@ type Transaction struct {
 // A TransactionOption is an option passed to Client.Transaction.
 type TransactionOption interface {
 	config(t *Transaction)
+	handleCommitResponse(r *pb.CommitResponse)
 }
 
 // MaxAttempts is a TransactionOption that configures the maximum number of times to
@@ -49,7 +51,8 @@ func MaxAttempts(n int) maxAttempts { return maxAttempts(n) }
 
 type maxAttempts int
 
-func (m maxAttempts) config(t *Transaction) { t.maxAttempts = int(m) }
+func (m maxAttempts) config(t *Transaction)                     { t.maxAttempts = int(m) }
+func (m maxAttempts) handleCommitResponse(r *pb.CommitResponse) {}
 
 // DefaultTransactionMaxAttempts is the default number of times to attempt a transaction.
 const DefaultTransactionMaxAttempts = 5
@@ -60,7 +63,35 @@ var ReadOnly = ro{}
 
 type ro struct{}
 
-func (ro) config(t *Transaction) { t.readOnly = true }
+func (ro) config(t *Transaction)                     { t.readOnly = true }
+func (ro) handleCommitResponse(r *pb.CommitResponse) {}
+
+// CommitResponse exposes information about a committed transaction.
+type CommitResponse struct {
+	response *pb.CommitResponse
+}
+
+// CommitTime returns the commit time from the commit response.
+func (r *CommitResponse) CommitTime() time.Time {
+	return r.response.CommitTime.AsTime()
+}
+
+// commitResponse is the TransactionOption to record a commit response.
+type commitResponse struct {
+	responseTo *CommitResponse
+}
+
+func (c commitResponse) config(t *Transaction) {}
+func (c commitResponse) handleCommitResponse(r *pb.CommitResponse) {
+	c.responseTo.response = r
+}
+
+// WithCommitResponseTo returns a TransactionOption that specifies where the
+// CommitResponse should be written on successful commit. Nothing is written
+// on a failed commit.
+func WithCommitResponseTo(r *CommitResponse) commitResponse {
+	return commitResponse{responseTo: r}
+}
 
 var (
 	// Defined here for testing.
@@ -70,6 +101,21 @@ var (
 )
 
 type transactionInProgressKey struct{}
+
+// isAborted checks if an error from a transaction operation
+// indicates that the entire transaction should be retried.
+func isAborted(err error) bool {
+	s, ok := status.FromError(err)
+	if !ok {
+		return false // Not a gRPC error
+	}
+	switch s.Code() {
+	case codes.Aborted:
+		return true
+	default:
+		return false
+	}
+}
 
 // RunTransaction runs f in a transaction. f should use the transaction it is given
 // for all Firestore operations. For any operation requiring a context, f should use
@@ -115,6 +161,7 @@ func (c *Client) RunTransaction(ctx context.Context, f func(context.Context, *Tr
 		}
 	}
 	var backoff gax.Backoff
+	var commitResponse *pb.CommitResponse
 	// TODO(jba): use other than the standard backoff parameters?
 	// TODO(jba): get backoff time from gRPC trailer metadata? See
 	// extractRetryDelay in https://code.googlesource.com/gocloud/+/master/spanner/retry.go.
@@ -130,34 +177,42 @@ func (c *Client) RunTransaction(ctx context.Context, f func(context.Context, *Tr
 			return err
 		}
 		t.id = res.Transaction
+
 		err = f(context.WithValue(ctx, transactionInProgressKey{}, 1), t)
 		// Read after write can only be checked client-side, so we make sure to check
 		// even if the user does not.
 		if err == nil && t.readAfterWrite {
 			err = errReadAfterWrite
 		}
-		if err != nil {
-			t.rollback()
-			// Prefer f's returned error to rollback error.
-			return err
-		}
-		t.ctx = trace.StartSpan(t.ctx, "cloud.google.com/go/firestore.Client.Commit")
-		_, err = t.c.c.Commit(t.ctx, &pb.CommitRequest{
-			Database:    t.c.path(),
-			Writes:      t.writes,
-			Transaction: t.id,
-		})
-		trace.EndSpan(t.ctx, err)
 
-		// If a read-write transaction returns Aborted, retry.
-		// On success or other failures, return here.
-		if t.readOnly || status.Code(err) != codes.Aborted {
-			// According to the Firestore team, we should not roll back here
-			// if err != nil. But spanner does.
-			// See https://code.googlesource.com/gocloud/+/master/spanner/transaction.go#740.
-			return err
+		if err == nil {
+			t.ctx = trace.StartSpan(t.ctx, "cloud.google.com/go/firestore.Client.Commit")
+			commitResponse, err = t.c.c.Commit(t.ctx, &pb.CommitRequest{
+				Database:    t.c.path(),
+				Writes:      t.writes,
+				Transaction: t.id,
+			})
+			trace.EndSpan(t.ctx, err)
+
+			// on success, handle the commit response
+			if err == nil {
+				for _, opt := range opts {
+					opt.handleCommitResponse(commitResponse)
+				}
+				return nil
+			}
 		}
 
+		// At this point, `err` is non-nil. It came from `f` or `Commit`.
+		t.rollback()
+
+		// If not a retryable error, or if read-only, return now.
+		// (We've already rolled back).
+		if t.readOnly || !isAborted(err) {
+			return err
+		}
+
+		// It's a retryable error, so continue to backoff and retry logic.
 		if txOpts == nil {
 			// txOpts can only be nil if is the first retry of a read-write transaction.
 			// (It is only set here and in the body of "if t.readOnly" above.)
@@ -168,6 +223,9 @@ func (c *Client) RunTransaction(ctx context.Context, f func(context.Context, *Tr
 					ReadWrite: &pb.TransactionOptions_ReadWrite{RetryTransaction: t.id},
 				},
 			}
+		} else if rw := txOpts.GetReadWrite(); rw != nil {
+			// Update transaction ID for read-write retries.
+			rw.RetryTransaction = t.id
 		}
 		// Use exponential backoff to avoid contention with other running
 		// transactions.
@@ -179,11 +237,7 @@ func (c *Client) RunTransaction(ctx context.Context, f func(context.Context, *Tr
 		// Reset state for the next attempt.
 		t.writes = nil
 	}
-	// If we run out of retries, return the last error we saw (which should
-	// be the Aborted from Commit, or a context error).
-	if err != nil {
-		t.rollback()
-	}
+
 	return err
 }
 
@@ -298,4 +352,17 @@ func (t *Transaction) WithReadOptions(opts ...ReadOption) *Transaction {
 		ro.apply(t.readSettings)
 	}
 	return t
+}
+
+// Execute runs the given pipeline in the context of the transaction.
+func (t *Transaction) Execute(p *Pipeline) *PipelineSnapshot {
+	if len(t.writes) > 0 {
+		t.readAfterWrite = true
+		return &PipelineSnapshot{
+			iter: &PipelineResultIterator{err: errReadAfterWrite},
+		}
+	}
+	p2 := p.copy()
+	p2.tx = t
+	return p2.Execute(t.ctx)
 }
