@@ -99,4 +99,11 @@ func TestCredentialsOptionSanitizesPathError(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), path) || strings.Contains(err.Error(), "private-file-name") {
 		t.Fatalf("path leaked in error: %v", err)
 	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing file was not classified: %v", err)
+	}
+	_, err = credentialsOption(t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "not regular") {
+		t.Fatalf("directory was not classified: %v", err)
+	}
 }

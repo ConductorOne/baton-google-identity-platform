@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 
 	firebase "firebase.google.com/go"
@@ -82,9 +83,22 @@ func New(ctx context.Context, credentialsJSONFilePath string) (*GoogleIdentityPl
 func credentialsOption(path string) (option.ClientOption, error) {
 	file, err := os.Open(path)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, errors.New("open credentials file: not found")
+		}
+		if errors.Is(err, fs.ErrPermission) {
+			return nil, errors.New("open credentials file: permission denied")
+		}
 		return nil, errors.New("open credentials file: failed")
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, errors.New("inspect credentials file: failed")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("credentials file is not regular")
+	}
 
 	data, err := io.ReadAll(io.LimitReader(file, googlecredentialguard.MaxJSONBytes+1))
 	if err != nil {
