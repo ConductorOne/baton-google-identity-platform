@@ -3,12 +3,16 @@ package connector
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"os"
 
 	firebase "firebase.google.com/go"
 	"firebase.google.com/go/auth"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	googlecredentialguard "github.com/conductorone/google-credential-guard"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
@@ -52,21 +56,45 @@ func (gip *GoogleIdentityPlatform) Validate(ctx context.Context) (annotations.An
 }
 
 // New returns the Google Identity Platform connector.
-func New(ctx context.Context, credentialsJSON string) (*GoogleIdentityPlatform, error) {
-	opt := option.WithCredentialsFile(credentialsJSON)
-	app, err := firebase.NewApp(ctx, nil, opt)
+func New(ctx context.Context, credentialsJSONFilePath string) (*GoogleIdentityPlatform, error) {
+	opt, err := credentialsOption(credentialsJSONFilePath)
 	if err != nil {
 		return nil, err
+	}
+	// An explicit config prevents Firebase from reading FIREBASE_CONFIG as a file.
+	app, err := firebase.NewApp(ctx, &firebase.Config{}, opt)
+	if err != nil {
+		return nil, errors.New("initialize Firebase app: invalid configuration")
 	}
 
 	client, err := app.Auth(ctx)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("initialize Firebase auth client: failed")
 	}
 
 	return &GoogleIdentityPlatform{
 		client: client,
 	}, nil
+}
+
+// credentialsOption reads an operator-configured local key with a strict size
+// limit before handing validated service-account bytes to the Google SDK.
+func credentialsOption(path string) (option.ClientOption, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, errors.New("open credentials file: failed")
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, googlecredentialguard.MaxJSONBytes+1))
+	if err != nil {
+		return nil, errors.New("read credentials file: failed")
+	}
+	key, err := googlecredentialguard.ParseServiceAccountJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("validate credentials file: %w", err)
+	}
+	return key.ClientOption()
 }
 
 func (gip *GoogleIdentityPlatform) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {

@@ -8,6 +8,10 @@ Check out [Baton](https://github.com/conductorone/baton) to learn more the proje
 
 Service account key for your project. If you don't already have one follow the steps [here](https://cloud.google.com/identity-platform/docs/install-admin-sdk#create-service-account-console) to create a service account and a service account key. If you already have a service account, make sure you have all the permissions set and APIs enabled. Then download the service key which will be used in the connector.
 
+`--credentials-json-file-path` is a path on the machine running this connector. For local CLI or Docker use, the operator must choose the file or mount it into the container. The connector reads at most 64 KiB plus one byte and accepts only a validated Google service-account key. It does not accept external-account configurations or Application Default Credentials as a fallback.
+
+For hosted use, do not expose this path setting to tenants or map a tenant-provided value to a server-local path. This connector cannot establish who chose a path; a hosted integration must enforce that boundary outside the connector, or use an interface that accepts uploaded credential bytes instead.
+
 ## brew
 
 ```
