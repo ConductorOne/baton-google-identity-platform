@@ -70,6 +70,8 @@ func New(ctx context.Context, credentialsJSONFilePath string) (*GoogleIdentityPl
 
 	client, err := app.Auth(ctx)
 	if err != nil {
+		// Firebase's signer error can print the complete private key. Do not wrap
+		// or log its raw error text; keep this failure class intentionally generic.
 		return nil, errors.New("initialize Firebase auth client: failed")
 	}
 
