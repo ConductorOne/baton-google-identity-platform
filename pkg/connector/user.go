@@ -52,7 +52,11 @@ func userResource(ctx context.Context, user *auth.ExportedUserRecord, parentReso
 		displayName = user.Email
 	}
 
-	userTraitOptions := []resource.UserTraitOption{resource.WithUserProfile(profile), resource.WithEmail(user.Email, true), resource.WithStatus(userStatus)}
+	userTraitOptions := []resource.UserTraitOption{
+		resource.WithUserProfile(profile), //nolint:staticcheck // Preserve the legacy UserTrait profile until its consumers migrate.
+		resource.WithEmail(user.Email, true),
+		resource.WithStatus(userStatus), //nolint:staticcheck // Preserve the legacy UserTrait status until its consumers migrate.
+	}
 	ret, err := resource.NewUserResource(displayName, resourceTypeUser, user.UID, userTraitOptions, resource.WithParentResourceID(parentResourceID))
 	if err != nil {
 		return nil, err
